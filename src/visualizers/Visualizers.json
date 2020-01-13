@@ -114,12 +114,6 @@
     "DEBUG_ONLY": false
   },
   {
-    "id": "WorkerHeader",
-    "title": "WorkerHeader",
-    "panel": "panels/WorkerHeader/WorkerHeaderPanel",
-    "DEBUG_ONLY": false
-  },
-  {
     "id": "ArtifactIndex",
     "title": "ArtifactIndex",
     "panel": "panels/ArtifactIndex/ArtifactIndexPanel",
@@ -135,6 +129,12 @@
     "id": "TabbedTextEditor",
     "title": "TabbedTextEditor",
     "panel": "panels/TabbedTextEditor/TabbedTextEditorPanel",
+    "DEBUG_ONLY": false
+  },
+  {
+    "id": "PlotlyGraph",
+    "title": "PlotlyGraph",
+    "panel": "panels/PlotlyGraph/PlotlyGraphPanel",
     "DEBUG_ONLY": false
   }
 ]

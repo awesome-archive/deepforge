@@ -1,8 +1,12 @@
-/*globals define, requirejs*/
+/*globals define */
 define([
+    '../../../config',
+    'webgme',
     'plugin/util',
     'q'
 ], function(
+    gmeConfig,
+    webgme,
     PluginUtils,
     Q
 ) {
@@ -14,7 +18,15 @@ define([
         }
     };
 
+    const PluginManager = webgme.PluginCliManager;
     var PtrCodeGen = function() {
+    };
+
+    PtrCodeGen.prototype.getPluginManager = function() {
+        if (!this.manager) {
+            this.manager = new PluginManager(null, this.logger, gmeConfig);
+        }
+        return this.manager;
     };
 
     PtrCodeGen.prototype.getCodeGenPluginIdFor = function(node) {
@@ -23,9 +35,7 @@ define([
             namespace = this.core.getNamespace(node),
             pluginId;
 
-        //this.logger.debug(`loaded pointer target of ${ptrId}: ${ptrNode}`);
         pluginId = (this.core.getOwnRegistry(node, 'validPlugins') || '').split(' ').shift();
-        //this.logger.info(`generating code for ${this.core.getAttribute(ptrNode, 'name')} using ${pluginId}`);
 
         if (this.core.isMetaNode(node) && CodeGen[name]) {
             pluginId = CodeGen[name].pluginId || CodeGen[name];
@@ -44,82 +54,45 @@ define([
         }
     };
 
-    PtrCodeGen.prototype.getPtrCodeHash = function(ptrId) {
-        return this.core.loadByPath(this.rootNode, ptrId)
-            .then(ptrNode => {
-                // Look up the plugin to use
-                var genInfo = this.getCodeGenPluginIdFor(ptrNode);
+    PtrCodeGen.prototype.getPtrCodeHash = async function(ptrId, config={}) {
+        const node = await this.core.loadByPath(this.rootNode, ptrId);
+        const info = this.getCodeGenPluginIdFor(node);
 
-                if (genInfo.pluginId) {
-                    var context = {
-                        namespace: genInfo.namespace,
-                        activeNode: this.core.getPath(ptrNode)
-                    };
+        if (info && info.pluginId) {
+            const context = {
+                namespace: info.namespace,
+                activeNode: this.core.getPath(node),
+                project: this.project,
+                commitHash: this.currentHash,
+            };
 
-                    // Load and run the plugin
-                    return this.executePlugin(genInfo.pluginId, context);
-                } else {
-                    var metanode = this.core.getMetaType(ptrNode),
-                        type = this.core.getAttribute(metanode, 'name');
-                    this.logger.warn(`Could not find plugin for ${type}. Will try to proceed anyway`);
-                    return null;
-                }
-            })
-            .then(hashes => hashes[0]);  // Grab the first asset for now
+            // Load and run the plugin
+            const result = await this.executePlugin(info.pluginId, config, context);
+            return result.artifacts[0];
+        } else {
+            var metanode = this.core.getMetaType(node),
+                type = this.core.getAttribute(metanode, 'name');
+            this.logger.warn(`Could not find plugin for ${type}. Will try to proceed anyway`);
+            return null;
+        }
     };
 
-    PtrCodeGen.prototype.getPtrCode = function(ptrId) {
-        return this.getPtrCodeHash(ptrId)
+    PtrCodeGen.prototype.getPtrCode = function() {
+        return this.getPtrCodeHash.apply(this, arguments)
             .then(hash => this.blobClient.getObjectAsString(hash));
     };
 
-    PtrCodeGen.prototype.createPlugin = function(pluginId) {
-        var deferred = Q.defer(),
-            pluginPath = [
-                'plugin',
-                pluginId,
-                pluginId,
-                pluginId
-            ].join('/');
-
-        requirejs([pluginPath], Plugin => {
-            var plugin = new Plugin();
-            deferred.resolve(plugin);
-        }, err => {
-            this.logger.error(`Could not load ${pluginId}: ${err}`);
-            deferred.reject(err);
-        });
-        return deferred.promise;
-    };
-
-    PtrCodeGen.prototype.configurePlugin = function(plugin, opts) {
-        var logger = this.logger.fork(plugin.getName());
-
-        return PluginUtils.loadNodesAtCommitHash(
-            this.project,
-            this.core,
-            this.currentHash,
-            this.logger,
-            opts
-        ).then(config => {
-            plugin.initialize(logger, this.blobClient, this.gmeConfig);
-            config.core = this.core;
-            config.project = this.project;
-            plugin.configure(config);
-            return plugin;
-        });
-    };
-
-    PtrCodeGen.prototype.executePlugin = function(pluginId, config) {
-        return this.createPlugin(pluginId)
-            .then(plugin => this.configurePlugin(plugin, config))
-            .then(plugin => {
-                return Q.ninvoke(plugin, 'main');
-            })
-            .then(result => {
-                this.logger.info('Finished calling ' + pluginId);
-                return result.artifacts;
-            });
+    PtrCodeGen.prototype.executePlugin = async function(pluginId, config, context) {
+        const manager = this.getPluginManager();
+        const result = await Q.ninvoke(
+            manager,
+            'executePlugin',
+            pluginId,
+            config,
+            context
+        );
+        this.logger.info('Finished calling ' + pluginId);
+        return result;
     };
 
     return PtrCodeGen;

@@ -129,5 +129,11 @@
                 "description": "Artifacts from pipeline executions are stored here."
             }
         ]
+    },
+    "Compute": {
+        "backends": ["gme", "local", "sciserver-compute"]
+    },
+    "Storage": {
+        "backends": ["gme", "sciserver-files"]
     }
 }

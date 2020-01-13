@@ -52,6 +52,14 @@
       "ApplyUpdates": {
         "src": "src/plugins/ApplyUpdates",
         "test": "test/plugins/ApplyUpdates"
+      },
+      "ExportBranch": {
+        "src": "src/plugins/ExportBranch",
+        "test": "test/plugins/ExportBranch"
+      },
+      "TwoPhaseCommit": {
+        "src": "src/plugins/TwoPhaseCommit",
+        "test": "test/plugins/TwoPhaseCommit"
       }
     },
     "layouts": {
@@ -155,7 +163,7 @@
         "src": "panels/Footer/FooterPanel",
         "title": "Footer",
         "panel": "src/visualizers/panels/Footer",
-        "secondary": false,
+        "secondary": true,
         "widget": "src/visualizers/widgets/Footer"
       },
       "LogViewer": {
@@ -218,7 +226,7 @@
         "src": "panels/WorkerHeader/WorkerHeaderPanel",
         "title": "WorkerHeader",
         "panel": "src/visualizers/panels/WorkerHeader",
-        "secondary": false,
+        "secondary": true,
         "widget": "src/visualizers/widgets/WorkerHeader"
       },
       "ArtifactIndex": {
@@ -248,6 +256,13 @@
         "panel": "src/visualizers/panels/TabbedTextEditor",
         "secondary": false,
         "widget": "src/visualizers/widgets/TabbedTextEditor"
+      },
+      "PlotlyGraph": {
+        "src": "panels/PlotlyGraph/PlotlyGraphPanel",
+        "title": "PlotlyGraph",
+        "panel": "src/visualizers/panels/PlotlyGraph",
+        "secondary": false,
+        "widget": "src/visualizers/widgets/PlotlyGraph"
       }
     },
     "addons": {},

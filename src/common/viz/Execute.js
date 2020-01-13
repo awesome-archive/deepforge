@@ -2,18 +2,22 @@
 // Mixin for executing jobs and pipelines
 define([
     'q',
-    'executor/ExecutorClient',
+    'deepforge/compute/index',
+    'deepforge/storage/index',
+    'deepforge/viz/ConfigDialog',
     'deepforge/api/ExecPulseClient',
     'deepforge/api/JobOriginClient',
     'deepforge/Constants',
-    'panel/FloatingActionButton/styles/Materialize'
+    'panel/FloatingActionButton/styles/Materialize',
 ], function(
     Q,
-    ExecutorClient,
+    Compute,
+    Storage,
+    ConfigDialog,
     ExecPulseClient,
     JobOriginClient,
     CONSTANTS,
-    Materialize
+    Materialize,
 ) {
 
     var Execute = function(client, logger) {
@@ -22,42 +26,92 @@ define([
         this.pulseClient = new ExecPulseClient({
             logger: this.logger
         });
-        this._executor = new ExecutorClient({
-            logger: this.logger.fork('ExecutorClient'),
-            serverPort: WebGMEGlobal.gmeConfig.server.port,
-            httpsecure: window.location.protocol === 'https:'
-        });
         this.originManager = new JobOriginClient({logger: this.logger});
     };
 
     Execute.prototype.executeJob = function(node) {
-        return this.runExecutionPlugin('ExecuteJob', {node: node});
+        return this.runExecutionPlugin('ExecuteJob', node);
     };
 
     Execute.prototype.executePipeline = function(node) {
-        return this.runExecutionPlugin('ExecutePipeline', {node: node});
+        return this.runExecutionPlugin('ExecutePipeline', node);
     };
 
-    Execute.prototype.runExecutionPlugin = function(pluginId, opts) {
-        var context = this.client.getCurrentPluginContext(pluginId),
-            node = opts.node || this.client.getNode(this._currentNodeId),
-            name = node.getAttribute('name'),
-            method;
+    Execute.prototype.runExecutionPlugin = async function(pluginId, activeNode) {
+        var deferred = Q.defer(),
+            context = this.client.getCurrentPluginContext(pluginId),
+            node = activeNode || this.client.getNode(this._currentNodeId);
 
-        // Set the activeNode
-        context.managerConfig.namespace = 'pipeline';
-        context.managerConfig.activeNode = node.getId();
-        method = opts.useSecondary ? 'runBrowserPlugin' : 'runServerPlugin';
-
-        if (method === 'runServerPlugin' &&
-            this.client.getBranchStatus() !== this.client.CONSTANTS.BRANCH_STATUS.SYNC) {
+        if (this.client.getBranchStatus() !== this.client.CONSTANTS.BRANCH_STATUS.SYNC) {
 
             Materialize.toast('Cannot execute operations when client is out-of-sync', 2000);
             return;
         }
 
-        this.client[method](pluginId, context, (err, result) => {
-            var msg = err ? `${name} failed!` : `${name} executed successfully!`,
+        context.managerConfig.namespace = 'pipeline';
+        context.managerConfig.activeNode = node.getId();
+
+        const configDialog = new ConfigDialog(this.client, this._currentNodeId);
+        const metadata = JSON.parse(JSON.stringify(WebGMEGlobal.allPluginsMetadata[pluginId]));
+        const computeMetadata = Compute.getAvailableBackends().map(id => Compute.getMetadata(id));
+        const storageMetadata = Storage.getAvailableBackends().map(id => Storage.getStorageMetadata(id));
+        metadata.configStructure.unshift({
+            name: 'basicHeader',
+            displayName: 'Basic Options',
+            valueType: 'section'
+        });
+        metadata.configStructure.push({
+            name: 'computeHeader',
+            displayName: 'Compute Options',
+            valueType: 'section'
+        });
+        metadata.configStructure.push({
+            name: 'compute',
+            displayName: 'Compute',
+            description: 'Computational resources to use for execution.',
+            valueType: 'dict',
+            value: Compute.getBackend(Compute.getAvailableBackends()[0]).name,
+            valueItems: computeMetadata,
+        });
+
+        metadata.configStructure.push({
+            name: 'storageHeader',
+            displayName: 'Storage Options',
+            valueType: 'section'
+        });
+        metadata.configStructure.push({
+            name: 'storage',
+            displayName: 'Storage',
+            description: 'Location to store intermediate/generated data.',
+            valueType: 'dict',
+            value: Storage.getBackend(Storage.getAvailableBackends()[0]).name,
+            valueItems: storageMetadata,
+        });
+
+        const allConfigs = await configDialog.show(metadata);
+        context.pluginConfig = allConfigs[pluginId];
+        context.pluginConfig.storage.id = storageMetadata
+            .find(metadata => metadata.name === allConfigs[pluginId].storage.name)
+            .id;
+        context.pluginConfig.compute.id = computeMetadata
+            .find(metadata => metadata.name === allConfigs[pluginId].compute.name)
+            .id;
+
+        const onPluginInitiated = (sender, event) => {
+            this.client.removeEventListener(this._client.CONSTANTS.PLUGIN_INITIATED, onPluginInitiated);
+            const {executionId} = event;
+            this.client.sendMessageToPlugin(executionId, 'executionId', executionId);
+            deferred.resolve(executionId);
+        };
+
+        this.client.addEventListener(
+            this.client.CONSTANTS.PLUGIN_INITIATED,
+            onPluginInitiated
+        );
+
+        this.client.runServerPlugin(pluginId, context, (err, result) => {
+            const name = node.getAttribute('name');
+            let msg = err ? `${name} failed!` : `${name} executed successfully!`,
                 duration = err ? 4000 : 2000;
 
             // Check if it was canceled - if so, show that type of message
@@ -68,75 +122,15 @@ define([
 
             Materialize.toast(msg, duration);
         });
+
+        return deferred.promise;
     };
 
     Execute.prototype.isRunning = function(node) {
-        var baseId,
-            base,
-            type;
-
         node = node || this.client.getNode(this._currentNodeId);
-        baseId = node.getBaseId();
-        base = this.client.getNode(baseId);
-        type = base.getAttribute('name');
-
-        if (type === 'Execution') {
-            return node.getAttribute('status') === 'running';
-        } else if (type === 'Job') {
-            return this.isRunningJob(node);
-        }
-        return false;
+        // TODO: Check the parent, too
+        return node.getAttribute('executionId');
     };
-
-    Execute.prototype.isRunningJob = function(job) {
-        var status = job.getAttribute('status');
-
-        return (status === 'running' || status === 'pending') &&
-            job.getAttribute('secret') && job.getAttribute('jobId');
-    };
-
-    Execute.prototype.silentStopJob = function(job) {
-        var jobHash,
-            secret;
-
-        job = job || this.client.getNode(this._currentNodeId);
-        jobHash = job.getAttribute('jobId');
-        secret = job.getAttribute('secret');
-        if (!jobHash || !secret) {
-            this.logger.error('Cannot stop job. Missing jobHash or secret');
-            return;
-        }
-
-        return this._executor.cancelJob(jobHash, secret)
-            .then(() => this.logger.info(`${jobHash} has been cancelled!`))
-            .fail(err => this.logger.error(`Job cancel failed: ${err}`));
-    };
-
-    Execute.prototype._setJobStopped = function(jobId, silent) {
-        if (!silent) {
-            var name = this.client.getNode(jobId).getAttribute('name');
-            this.client.startTransaction(`Stopping "${name}" job`);
-        }
-
-        this.client.delAttribute(jobId, 'jobId');
-        this.client.delAttribute(jobId, 'secret');
-        this.client.setAttribute(jobId, 'status', 'canceled');
-
-        if (!silent) {
-            this.client.completeTransaction();
-        }
-    };
-
-    Execute.prototype.stopJob = function(job, silent) {
-        var jobId;
-
-        job = job || this.client.getNode(this._currentNodeId);
-        jobId = job.getId();
-
-        this.silentStopJob(job);
-        this._setJobStopped(jobId, silent);
-    };
-
 
     Execute.prototype.loadChildren = function(id) {
         var deferred = Q.defer(),
@@ -163,47 +157,24 @@ define([
         return deferred.promise;
     };
 
-    Execute.prototype.stopExecution = function(id, inTransaction) {
-        var execNode = this.client.getNode(id || this._currentNodeId);
+    Execute.prototype.stopExecution = function(nodeId=this._currentNodeId) {
+        const node = this.client.getNode(nodeId);
+        const base = this.client.getNode(node.getBaseId());
+        const type = base.getAttribute('name');
 
-        return this.loadChildren(id)
-            .then(() => this._stopExecution(execNode, inTransaction));
-    };
-
-    Execute.prototype.silentStopExecution = function(id) {
-        var execNode = this.client.getNode(id || this._currentNodeId);
-
-        // Stop the execution w/o setting any attributes
-        return this.loadChildren(id)
-            .then(() => this._silentStopExecution(execNode));
-    };
-
-    Execute.prototype._stopExecution = function(execNode, inTransaction) {
-        var msg = `Canceling ${execNode.getAttribute('name')} execution`,
-            jobIds;
-
-        if (!inTransaction) {
-            this.client.startTransaction(msg);
+        let executionId = node.getAttribute('executionId');
+        this.client.delAttribute(nodeId, 'executionId');
+        if (type === 'Job' && !executionId) {
+            const execNode = this.client.getNode(node.getParentId());
+            executionId = execNode.getAttribute('executionId');
+            this.client.delAttribute(nodeId, 'executionId');
         }
 
-        jobIds = this._silentStopExecution(execNode);
-
-        this.client.setAttribute(execNode.getId(), 'status', 'canceled');
-        jobIds.forEach(jobId => this._setJobStopped(jobId, true));
-
-        if (!inTransaction) {
-            this.client.completeTransaction();
+        if (executionId) {
+            this.client.abortPlugin(executionId);
+        } else {
+            this.logger.warn(`Could not find execution ID for ${nodeId}`);
         }
-    };
-
-    Execute.prototype._silentStopExecution = function(execNode) {
-        var runningJobIds = execNode.getChildrenIds()
-            .map(id => this.client.getNode(id))
-            .filter(job => this.isRunning(job));  // get running jobs
-
-        runningJobIds.forEach(job => this.silentStopJob(job));  // stop them
-
-        return runningJobIds;
     };
 
     // Resuming Executions
@@ -221,10 +192,11 @@ define([
     };
 
     Execute.prototype._checkJobExecution = function (job) {
-        var jobId = job.getAttribute('jobId'),
-            status = job.getAttribute('status');
+        const jobInfo = job.getAttribute('jobInfo');
+        const status = job.getAttribute('status');
 
-        if (status === 'running' && jobId) {
+        if (status === 'running' && jobInfo) {
+            const jobId = JSON.parse(jobInfo).hash;
             return this.pulseClient.check(jobId)
                 .then(status => {
                     if (status !== CONSTANTS.PULSE.DOESNT_EXIST) {

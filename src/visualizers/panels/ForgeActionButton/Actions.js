@@ -96,8 +96,8 @@ define([
                 // Only show if stopped!
                 return !this.isRunning();
             },
-            action: function(event) {
-                this.runExecutionPlugin(pluginId, {useSecondary: event.shiftKey});
+            action: function() {
+                this.runExecutionPlugin(pluginId);
             }
         };
     };
@@ -190,7 +190,7 @@ define([
                     return this.isRunning();
                 },
                 action: function() {
-                    this.stopJob();
+                    this.stopExecution();
                 }
             }
         ],
@@ -223,20 +223,27 @@ define([
                 name: 'Export Pipeline',
                 icon: 'launch',
                 priority: -1,
+                action: async function() {
+                    try {
+                        const result = await this.exportPipeline();
+                        Materialize.toast('Export successful!', 2000);
+                        // Download the result!
+                        this.downloadFromBlob(result.artifacts[0]);
+                        result.__unread = true;
+                        this.results.push(result);
+                        this._updatePluginBtns();
+                    } catch (err) {
+                        this.logger.warn('Pipeline export failed:', err);
+                        Materialize.toast(`Export failed: ${err}`, 4000);
+                    }
+                }
+            },
+            {
+                name: 'Execute Pipeline',
+                icon: 'play_arrow',
+                priority: 1,
                 action: function() {
-                    this.exportPipeline()
-                        .then(result => {
-                            Materialize.toast('Export successful!', 2000);
-                            // Download the result!
-                            this.downloadFromBlob(result.artifacts[0]);
-                            result.__unread = true;
-                            this.results.push(result);
-                            this._updatePluginBtns();
-                        })
-                        .fail(err => {
-                            this.logger.warn('Pipeline export failed:', err);
-                            Materialize.toast(`Export failed: ${err}`, 4000);
-                        });
+                    return this.executePipeline();
                 }
             }
         ],

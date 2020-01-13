@@ -1,10 +1,10 @@
-/*globals $, window, define, _, WebGMEGlobal */
+/*globals $, define, _, WebGMEGlobal */
 /*jshint browser: true*/
 
 define([
     'blob/BlobClient',
     'js/Utils/SaveToDisk',
-    './ConfigDialog',
+    'deepforge/viz/ConfigDialog',
     'js/Constants',
     'panel/FloatingActionButton/FloatingActionButton',
     'deepforge/viz/PipelineControl',
@@ -400,17 +400,14 @@ define([
             .fail(err => this.logger.error(`Blob download failed: ${err}`));
     };
 
-    /// Export Pipeline Support
-    ForgeActionButton.prototype.exportPipeline = function() {
-        var deferred = Q.defer(),
-            pluginId = 'Export',
-            metadata = WebGMEGlobal.allPluginsMetadata[pluginId],
-            id = this._currentNodeId,
-            node = this.client.getNode(id),
-            inputData,
-            inputNames;
+    // Export Pipeline Support
+    ForgeActionButton.prototype.exportPipeline = async function() {
+        const pluginId = 'Export';
+        const metadata = WebGMEGlobal.allPluginsMetadata[pluginId];
+        const id = this._currentNodeId;
+        const node = this.client.getNode(id);
 
-        inputData = node.getChildrenIds()
+        const inputData = node.getChildrenIds()
             .map(id => this.client.getNode(id))
             .filter(node => {
                 var typeId = node.getMetaTypeId(),
@@ -445,7 +442,7 @@ define([
             .filter(output => output.getAttribute('data'));
 
         // get the name of node referenced from the input op
-        inputNames = inputData
+        const inputNames = inputData
             .map(node => {
                 var cntrId = node.getParentId(),
                     opId = this._client.getNode(cntrId).getParentId(),
@@ -468,33 +465,57 @@ define([
         }).sort((a, b) => a.displayName < b.displayName ? -1 : 1);
 
         var exportFormats = Object.keys(ExportFormatDict),
-            configDialog = new ConfigDialog(this.client, this._currentNodeId),
+            configDialog = new ConfigDialog(this.client),
             inputConfig = _.extend({}, metadata);
 
         inputConfig.configStructure = inputOpts;
 
         // Try to get the extension options
         if (inputOpts.length || exportFormats.length > 1) {
-            configDialog.show(inputConfig, (allConfigs) => {
-                var context = this.client.getCurrentPluginContext(pluginId),
-                    exportFormat = allConfigs.FormatOptions.exportFormat,
-                    staticInputs = Object.keys(allConfigs[pluginId]).filter(input => allConfigs[pluginId][input]);
-
-                this.logger.debug('Exporting pipeline to format', exportFormat);
-                this.logger.debug('static inputs:', staticInputs);
-
-                context.managerConfig.namespace = 'pipeline';
-                context.pluginConfig = {
-                    format: exportFormat,
-                    staticInputs: staticInputs,
-                    extensionConfig: allConfigs.extensionConfig
-                };
-                return Q.ninvoke(this.client, 'runBrowserPlugin', pluginId, context)
-                    .then(deferred.resolve)
-                    .fail(deferred.reject);
+            inputConfig.configStructure.unshift({
+                name: 'staticInputs',
+                displayName: 'Static Artifacts',
+                valueType: 'section'
             });
+            inputConfig.configStructure.push({
+                name: 'exportFormatOptions',
+                displayName: 'Export Options',
+                valueType: 'section'
+            });
+            const valueItems = Object.keys(ExportFormatDict)
+                .map(id => {
+                    const configStructure = ExportFormatDict[id].getConfigStructure ?
+                        ExportFormatDict[id].getConfigStructure() : [];
+                    return {id, name: id, configStructure};
+                });
+
+            inputConfig.configStructure.push({
+                name: 'exportFormat',
+                displayName: 'Export Format',
+                description: '',
+                value: exportFormats[0],
+                valueType: 'dict',
+                valueItems: valueItems
+            });
+
+            const allConfigs = await configDialog.show(inputConfig);
+            const context = this.client.getCurrentPluginContext(pluginId);
+            const exportFormat = allConfigs[pluginId].exportFormat.id;
+            const staticInputs = Object.keys(allConfigs[pluginId])
+                .filter(input => input !== 'exportFormat' && allConfigs[pluginId][input]);
+
+            this.logger.debug('Exporting pipeline to format', exportFormat);
+            this.logger.debug('static inputs:', staticInputs);
+
+            context.managerConfig.namespace = 'pipeline';
+            context.pluginConfig = {
+                format: exportFormat,
+                staticInputs: staticInputs,
+                extensionConfig: allConfigs[pluginId].exportFormat.config
+            };
+            return await Q.ninvoke(this.client, 'runServerPlugin', pluginId, context);
         } else {  // no options - just run the plugin!
-            var context = this.client.getCurrentPluginContext(pluginId);
+            const context = this.client.getCurrentPluginContext(pluginId);
 
             this.logger.debug('Exporting pipeline to format', exportFormats[0]);
 
@@ -503,10 +524,8 @@ define([
                 format: exportFormats[0],
                 staticInputs: []
             };
-            return Q.ninvoke(this.client, 'runBrowserPlugin', pluginId, context);
+            return await Q.ninvoke(this.client, 'runServerPlugin', pluginId, context);
         }
-
-        return deferred.promise;
     };
 
     return ForgeActionButton;
